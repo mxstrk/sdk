@@ -26,7 +26,7 @@ side builds with the distro aarch64 GCC, the M4/M7 firmware with distro arm-none
 | la93xx_host_sw | [rfnm/la9310-driver](https://github.com/rfnm/la9310-driver) | LA9310 kernel modules: RF datapath, daughterboard drivers, QEC, AGC, scheduling |
 | la93xx_freertos | [rfnm/la9310-freertos](https://github.com/rfnm/la9310-freertos) | LA9310 Cortex-M4 firmware (`la9310.bin`) |
 | imx8mp-m7 | [rfnm/imx8mp-m7](https://github.com/rfnm/imx8mp-m7) | i.MX8MP Cortex-M7 front-end/GPIO firmware (`rfnm_m7_v0.elf`) |
-| librfnm | [rfnm/librfnm](https://github.com/rfnm/librfnm) | the client library (v2 line, branch `dev-v2`) |
+| librfnm | [rfnm/librfnm](https://github.com/rfnm/librfnm) | the client library (v2 line) |
 | vsg | [rfnm/vsg](https://github.com/rfnm/vsg) | vector signal generator: NEON DSP kernels + vsgd daemon |
 | webgui | [rfnm/webgui](https://github.com/rfnm/webgui) | on-board web stack: spectrumd (RTSA), appd, ismmond, ddnsd, GUI, machine API |
 | apps | [rfnm/apps](https://github.com/rfnm/apps) | on-board daemons: aisd, cellsyncd, clockgend, iod, lorad, vrtd + shared layer |
