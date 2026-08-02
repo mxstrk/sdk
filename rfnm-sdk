@@ -162,7 +162,7 @@ build_webgui() {
 	make -C "$SRC/webgui/daemon" -j"$JOBS" SYSROOT="$(sysroot_path)" LIBRFNM="$SRC/librfnm"
 	mkdir -p "$OUT/rootfs-overlay/rfnm/spectrum/www"
 	rsync -a "$SRC/webgui/www/" "$OUT/rootfs-overlay/rfnm/spectrum/www/"
-	find "$SRC/webgui/daemon" -maxdepth 1 -name '*-imx8mp' -exec cp {} "$OUT/rootfs-overlay/rfnm/spectrum/" \;
+	find "$SRC/webgui/daemon" -maxdepth 1 -type f -name '*-imx8mp' -exec cp {} "$OUT/rootfs-overlay/rfnm/spectrum/" \;
 }
 
 build_apps() {
