@@ -29,7 +29,7 @@ side builds with the distro aarch64 GCC, the M4/M7 firmware with distro arm-none
 | librfnm | [rfnm/librfnm](https://github.com/rfnm/librfnm) | the client library (v2 line) |
 | vsg | [rfnm/vsg](https://github.com/rfnm/vsg) | vector signal generator: NEON DSP kernels + vsgd daemon |
 | webgui | [rfnm/webgui](https://github.com/rfnm/webgui) | on-board web stack: spectrumd (RTSA), appd, ismmond, ddnsd, GUI, machine API |
-| apps | [rfnm/apps](https://github.com/rfnm/apps) | on-board daemons: aisd, cellsyncd, clockgend, iod, lorad, vrtd + shared layer |
+| apps | [rfnm/webapps](https://github.com/rfnm/webapps) | on-board daemons: aisd, cellsyncd, clockgend, iod, lorad, vrtd + shared layer |
 | diora-sdk-open-source | [rfnm/diora-sdk-open-source](https://github.com/rfnm/diora-sdk-open-source) | Metanoia MT3812 vendor SDK (BSD-3) — Yucca daughterboard dependency |
 | mcux-sdk | [NXP](https://github.com/nxp-mcuxpresso/mcux-sdk) | MCUXpresso SDK @ MCUX_2.14.0 — M7 firmware dependency |
 
