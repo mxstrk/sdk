@@ -35,7 +35,7 @@ cmd_init() {
 	[ "$missing" = 0 ] || die "install the missing packages (Debian: gcc-aarch64-linux-gnu gcc-arm-none-eabi cmake bison flex bc libssl-dev) and re-run"
 	echo "  toolchains OK: $(aarch64-linux-gnu-gcc -dumpversion) / arm-none-eabi $(arm-none-eabi-gcc -dumpversion)"
 	mkdir -p "$SRC"
-	{ manifest; [ "$with_plugins" = 1 ] && plugins; } | while read -r name dir url branch; do
+	{ manifest; if [ "$with_plugins" = 1 ]; then plugins; fi; } | while read -r name dir url branch; do
 		if [ -d "$SRC/$dir/.git" ]; then
 			echo "  present: $name ($dir)"
 		else
