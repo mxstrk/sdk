@@ -96,7 +96,8 @@ build_kernel() {
 	mkdir -p "$OUT/boot"
 	cp "$K/arch/arm64/boot/Image" "$OUT/boot/"
 	cp "$K/arch/arm64/boot/dts/freescale/imx8mp-rfnm.dtb" "$OUT/boot/"
-	strings "$OUT/boot/imx8mp-rfnm.dtb" | grep -q 'rfnm,si5510' || die "dtb identity check failed (expected rfnm,si5510)"
+	# no grep -q here: it exits at first match, strings dies of SIGPIPE and pipefail fails the check
+	strings "$OUT/boot/imx8mp-rfnm.dtb" | grep 'rfnm,si5510' >/dev/null || die "dtb identity check failed (expected rfnm,si5510)"
 	echo "out/boot/Image + imx8mp-rfnm.dtb (identity-checked)"
 }
 
