@@ -1,0 +1,33 @@
+# boards.toml — the single source of truth for every SDK tool.
+# Copy to boards.toml at the SDK root and edit. Every script takes --board <name>
+# and reads its fields from here; nothing else in the SDK hardcodes an address.
+
+[host]
+tftp_root = "/srv/tftp"          # only needed for the NFS-boot dev workflow
+snapshot_root = "/srv/rfnm/snapshots"
+snapshot_keep = 6
+
+[board.blue0]
+ip = "192.168.1.50"
+user = "root"
+password = "rfnm"                # or ssh_key = "~/.ssh/id_rfnm"
+# --- optional: only for the NFS-boot developer workflow ---
+rootfs = ""                      # host path of the exported NFS rootfs (doubles as cross sysroot)
+tftp_dir = "blue0"               # subdir of host.tftp_root holding Image + imx8mp-rfnm.dtb
+console = ""                     # /dev/serial/by-id/... FTDI at 115200 8N1
+ready_marker = "hard reset complete"   # dmesg gate after reboot
+
+# --- optional: programmable power supply for hard power-cycles ---
+[board.blue0.power]
+backend = "manual"               # manual | rigol-dp832 | siglent-spd1168x | shell
+address = ""                     # SCPI host:port for the rigol/siglent backends
+channel = "CH1"
+volts = 12.0
+amps = 3.0
+off_seconds = 15
+# backend=shell: on_cmd = "...", off_cmd = "..."
+
+# --- optional: provenance map for tools/build_audit.sh ---
+# deployed path (relative to the board rootfs) = build artifact (relative to the SDK root)
+# [audit]
+# "rfnm/apps/myapp/myappd" = "sources/myapp/build-imx8mp/myappd"

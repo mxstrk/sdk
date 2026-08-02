@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# rfnm-sdk — one entry point for the RFNM Blue open-source SDK.
+#
+#   ./rfnm-sdk init [--plugins]     check host tools, clone every component into sources/
+#   ./rfnm-sdk update               fast-forward every clone on its manifest branch
+#   ./rfnm-sdk sysroot <board>      pull a cross sysroot from YOUR board (or use its NFS rootfs)
+#   ./rfnm-sdk build [component]    build everything (or: kernel modules m4 m7 librfnm vsg webgui apps)
+#   ./rfnm-sdk status               one-line state of every source tree + build artifact
+#   ./rfnm-sdk deploy <board>       rsync built artifacts onto a board (asks before writing)
+#
+# Boards are described in boards.toml (copy boards.toml.example). Cross toolchains are the
+# distro packages: gcc-aarch64-linux-gnu (Linux side) + gcc-arm-none-eabi (M4/M7 firmware).
+set -euo pipefail
+SDK="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC="$SDK/sources"
+OUT="$SDK/out"
+JOBS="${JOBS:-$(nproc)}"
+die() { echo "rfnm-sdk: $*" >&2; exit 1; }
+note() { printf '\n\033[1m== %s\033[0m\n' "$*"; }
+
+# ---------------------------------------------------------------- manifest --
+manifest() { grep -vE '^\s*(#|$)' "$SDK/manifest.conf"; }
+plugins()  { grep -E '^#plugin:' "$SDK/manifest.conf" | sed 's/^#plugin:\s*//'; }
+
+cmd_init() {
+	local with_plugins=0
+	[ "${1:-}" = "--plugins" ] && with_plugins=1
+	note "host tool check"
+	local missing=0
+	for t in git make cmake rsync tar aarch64-linux-gnu-gcc arm-none-eabi-gcc bison flex bc openssl; do
+		command -v "$t" >/dev/null || { echo "  MISSING: $t"; missing=1; }
+	done
+	command -v qemu-aarch64-static >/dev/null || command -v qemu-aarch64 >/dev/null || \
+		echo "  note: qemu-aarch64(-static) not found - off-board selftests will be skipped"
+	[ "$missing" = 0 ] || die "install the missing packages (Debian: gcc-aarch64-linux-gnu gcc-arm-none-eabi cmake bison flex bc libssl-dev) and re-run"
+	echo "  toolchains OK: $(aarch64-linux-gnu-gcc -dumpversion) / arm-none-eabi $(arm-none-eabi-gcc -dumpversion)"
+	mkdir -p "$SRC"
+	{ manifest; [ "$with_plugins" = 1 ] && plugins; } | while read -r name dir url branch; do
+		if [ -d "$SRC/$dir/.git" ]; then
+			echo "  present: $name ($dir)"
+		else
+			note "clone $name -> sources/$dir  [$branch]"
+			extra=()
+			if [ "$name" = mcux-sdk ]; then extra=(--depth 1); fi   # tag clone; full history is GBs
+			git clone "${extra[@]}" --branch "$branch" "$url" "$SRC/$dir"
+		fi
+	done
+	( cd "$SRC/la93xx_host_sw" && git submodule update --init LimeSuiteNG )
+	[ -f "$SDK/boards.toml" ] || echo "next: cp boards.toml.example boards.toml && edit it, then ./rfnm-sdk sysroot <board> && ./rfnm-sdk build"
+}
+
+cmd_update() {
+	manifest | while read -r name dir url branch; do
+		[ -d "$SRC/$dir/.git" ] || continue
+		printf '  %-18s ' "$name"
+		git -C "$SRC/$dir" pull --ff-only origin "$branch" 2>&1 | tail -1
+	done
+}
+
+# ---------------------------------------------------------------- sysroot --
+board_field() { python3 "$SDK/tools/rfnm_boards.py" get "$1" "$2" 2>/dev/null || true; }
+
+cmd_sysroot() {
+	local b="${1:?usage: rfnm-sdk sysroot <board>}"
+	local rootfs; rootfs=$(board_field "$b" rootfs)
+	mkdir -p "$SDK/sysroot"
+	if [ -n "$rootfs" ] && [ -d "$rootfs" ]; then
+		note "board '$b' has an NFS rootfs on this host - using it directly as sysroot"
+		ln -sfn "$rootfs" "$SDK/sysroot/current"
+	else
+		local ip user pw; ip=$(board_field "$b" ip); user=$(board_field "$b" user); pw=$(board_field "$b" password)
+		[ -n "$ip" ] || die "board '$b' not in boards.toml"
+		note "pulling sysroot from $user@$ip (headers + libraries only)"
+		local RS=(rsync -a --delete --copy-unsafe-links -e "ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new")
+		command -v sshpass >/dev/null && [ -n "$pw" ] && RS=(sshpass -p "$pw" "${RS[@]}")
+		mkdir -p "$SDK/sysroot/$b"
+		"${RS[@]}" --include='/usr' --include='/usr/include/***' --include='/usr/lib/***' \
+			--include='/usr/local' --include='/usr/local/include/***' --include='/usr/local/lib/***' \
+			--include='/lib/***' --exclude='*' "$user@$ip:/" "$SDK/sysroot/$b/"
+		ln -sfn "$SDK/sysroot/$b" "$SDK/sysroot/current"
+	fi
+	echo "sysroot ready: $SDK/sysroot/current"
+}
+
+sysroot_path() {
+	[ -e "$SDK/sysroot/current" ] || die "no sysroot yet - run: ./rfnm-sdk sysroot <board>"
+	readlink -f "$SDK/sysroot/current"
+}
+
+# ------------------------------------------------------------------ build --
+build_kernel() {
+	note "kernel (Image + dtbs)  [sources/imx8mp-kernel]"
+	local K="$SRC/imx8mp-kernel"
+	make -C "$K" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- imx8mp_rfnm_defconfig
+	make -C "$K" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j"$JOBS" Image dtbs
+	mkdir -p "$OUT/boot"
+	cp "$K/arch/arm64/boot/Image" "$OUT/boot/"
+	cp "$K/arch/arm64/boot/dts/freescale/imx8mp-rfnm.dtb" "$OUT/boot/"
+	strings "$OUT/boot/imx8mp-rfnm.dtb" | grep -q 'rfnm,si5510' || die "dtb identity check failed (expected rfnm,si5510)"
+	echo "out/boot/Image + imx8mp-rfnm.dtb (identity-checked)"
+}
+
+build_modules() {
+	note "LA9310 kernel modules  [sources/la93xx_host_sw]"
+	local K="$SRC/imx8mp-kernel" D="$SRC/la93xx_host_sw"
+	[ -f "$K/.config" ] || die "build the kernel first (./rfnm-sdk build kernel) - modules need its build tree"
+	make -C "$K" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules_prepare
+	if [ -e "$K/vmlinux.symvers" ] && [ ! -e "$K/Module.symvers" ]; then cp "$K/vmlinux.symvers" "$K/Module.symvers"; fi
+	make -C "$D" -j"$JOBS" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- \
+		KERNEL_DIR="$K" RFNM_BUILD_DIR="$SRC" \
+		LA9310_COMMON_HEADERS="$SRC/la93xx_freertos/common_headers" \
+		CONFIG_ENABLE_FLOAT_BYPASS=y
+	mkdir -p "$OUT/modules"
+	find "$D/kernel_driver" -name '*.ko' -exec cp {} "$OUT/modules/" \;
+	ls "$OUT/modules" | sed 's/^/  /'
+}
+
+build_m4() {
+	note "LA9310 M4 firmware (la9310.bin)  [sources/la93xx_freertos]"
+	( cd "$SRC/la93xx_freertos/Demo/CORTEX_M4_NXP_LA9310_GCC" && \
+	  ARMGCC_DIR="${ARMGCC_DIR:-/usr}" ./build_release.sh -boot_mode=pcie )
+	mkdir -p "$OUT/firmware"
+	find "$SRC/la93xx_freertos/Demo/CORTEX_M4_NXP_LA9310_GCC" -name 'la9310.bin' -exec cp {} "$OUT/firmware/" \; -quit
+	ls -la "$OUT/firmware/la9310.bin"
+}
+
+build_m7() {
+	note "i.MX8MP M7 firmware (rfnm_m7_v0.elf)  [sources/imx8mp-m7]"
+	MCUX_SDK="$SRC/mcux-sdk" RFNM_KERNEL_SRC="$SRC/imx8mp-kernel" "$SRC/imx8mp-m7/build.sh"
+	mkdir -p "$OUT/firmware"
+	cp "$SRC/imx8mp-m7/out/rfnm_m7_v0.elf" "$OUT/firmware/"
+}
+
+build_librfnm() {
+	note "librfnm (host + aarch64)  [sources/librfnm]"
+	cmake -S "$SRC/librfnm" -B "$SRC/librfnm/build-host" -DCMAKE_BUILD_TYPE=Release >/dev/null
+	cmake --build "$SRC/librfnm/build-host" -j"$JOBS"
+	local SYS; SYS=$(sysroot_path)
+	RFNM_SYSROOT="$SYS" cmake -S "$SRC/librfnm" -B "$SRC/librfnm/build-imx8mp" -DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_TOOLCHAIN_FILE="$SDK/cross/imx8mp.cmake" >/dev/null
+	cmake --build "$SRC/librfnm/build-imx8mp" -j"$JOBS"
+	mkdir -p "$OUT/rootfs-overlay/usr/local/lib" "$OUT/rootfs-overlay/usr/local/include"
+	find "$SRC/librfnm/build-imx8mp" -maxdepth 1 -name 'librfnm.*' \( -name '*.so*' -o -name '*.a' \) -exec cp -a {} "$OUT/rootfs-overlay/usr/local/lib/" \;
+	cp -a "$SRC/librfnm/include/librfnm" "$OUT/rootfs-overlay/usr/local/include/"
+}
+
+build_vsg() {
+	note "vsg (libvsg + vsgd + qemu test suite)  [sources/vsg]"
+	make -C "$SRC/vsg" -j"$JOBS" CROSS=aarch64-linux-gnu-
+	if command -v qemu-aarch64-static >/dev/null || command -v qemu-aarch64 >/dev/null; then
+		make -C "$SRC/vsg" test CROSS=aarch64-linux-gnu-
+	fi
+	make -C "$SRC/vsg" -j"$JOBS" build/vsgd CROSS=aarch64-linux-gnu- \
+		SYSROOT="$(sysroot_path)" LIBRFNM="$SRC/librfnm" COMMON="$SRC/apps/common"
+	mkdir -p "$OUT/rootfs-overlay/rfnm/vsg/bin" "$OUT/rootfs-overlay/etc/systemd/system"
+	cp "$SRC/vsg/build/vsgd" "$OUT/rootfs-overlay/rfnm/vsg/bin/"
+	cp "$SRC/vsg/daemon/rfnm-vsg.service" "$OUT/rootfs-overlay/etc/systemd/system/"
+}
+
+build_webgui() {
+	note "webgui daemons (spectrumd ismmond appd) + www  [sources/webgui]"
+	make -C "$SRC/webgui/daemon" -j"$JOBS" SYSROOT="$(sysroot_path)" LIBRFNM="$SRC/librfnm"
+	mkdir -p "$OUT/rootfs-overlay/rfnm/spectrum/www"
+	rsync -a "$SRC/webgui/www/" "$OUT/rootfs-overlay/rfnm/spectrum/www/"
+	find "$SRC/webgui/daemon" -maxdepth 1 -name '*-imx8mp' -exec cp {} "$OUT/rootfs-overlay/rfnm/spectrum/" \;
+}
+
+build_apps() {
+	note "on-board apps  [sources/apps]"
+	make -C "$SRC/apps" cross RFNM_SYSROOT="$(sysroot_path)" LIBRFNM="$SRC/librfnm"
+	mkdir -p "$OUT/rootfs-overlay/rfnm/apps"
+	for a in aisd cellsyncd clockgend iod lorad vrtd; do
+		find "$SRC/apps/$a" -maxdepth 2 -type f -name "$a" -exec cp {} "$OUT/rootfs-overlay/rfnm/apps/" \; 2>/dev/null || true
+	done
+}
+
+cmd_build() {
+	local what="${1:-all}"
+	case "$what" in
+		kernel)   build_kernel ;;
+		modules)  build_modules ;;
+		m4)       build_m4 ;;
+		m7)       build_m7 ;;
+		librfnm)  build_librfnm ;;
+		vsg)      build_vsg ;;
+		webgui)   build_webgui ;;
+		apps)     build_apps ;;
+		all)      build_kernel; build_modules; build_m4; build_m7; build_librfnm; build_vsg; build_webgui; build_apps
+		          note "done - artifacts in out/ (boot/, modules/, firmware/, rootfs-overlay/)"
+		          cp -a "$SDK/firmware/vspa" "$OUT/firmware/" 2>/dev/null || true ;;
+		*) die "unknown component '$what' (kernel modules m4 m7 librfnm vsg webgui apps all)" ;;
+	esac
+}
+
+cmd_status() {
+	note sources
+	manifest | while read -r name dir url branch; do
+		if [ -d "$SRC/$dir/.git" ]; then
+			printf '  %-18s %-14s %s\n' "$name" "[$branch]" "$(git -C "$SRC/$dir" log --oneline -1 | cut -c1-70)"
+		else
+			printf '  %-18s (not cloned)\n' "$name"
+		fi
+	done
+	note artifacts
+	[ -d "$OUT" ] && find "$OUT" -maxdepth 2 -type f | head -30 | sed 's/^/  /' || echo "  (none - run ./rfnm-sdk build)"
+}
+
+cmd_deploy() {
+	local b="${1:?usage: rfnm-sdk deploy <board>}"
+	local ip user pw; ip=$(board_field "$b" ip); user=$(board_field "$b" user); pw=$(board_field "$b" password)
+	[ -n "$ip" ] || die "board '$b' not in boards.toml"
+	[ -d "$OUT/rootfs-overlay" ] || die "nothing built yet"
+	echo "will rsync out/rootfs-overlay/ -> $user@$ip:/  and out/modules/ -> /rfnm/kernel/"
+	echo "kernel Image/dtb are NOT copied automatically (boot partition or TFTP dir - see docs/nfs-boot.md)"
+	read -r -p "proceed? [y/N] " a; [ "$a" = y ] || exit 1
+	local RS=(rsync -av -e "ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new")
+	command -v sshpass >/dev/null && [ -n "$pw" ] && RS=(sshpass -p "$pw" "${RS[@]}")
+	"${RS[@]}" "$OUT/rootfs-overlay/" "$user@$ip:/"
+	if [ -d "$OUT/modules" ]; then "${RS[@]}" "$OUT/modules/" "$user@$ip:/rfnm/kernel/"; fi
+	echo "deployed. reboot the board (tools/reboot_board.sh $b) and wait for its ready marker."
+}
+
+case "${1:-}" in
+	init)    shift; cmd_init "$@" ;;
+	update)  cmd_update ;;
+	sysroot) shift; cmd_sysroot "$@" ;;
+	build)   shift; cmd_build "${1:-all}" ;;
+	status)  cmd_status ;;
+	deploy)  shift; cmd_deploy "$@" ;;
+	*) sed -n '2,13p' "$0"; exit 1 ;;
+esac
