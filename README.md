@@ -35,8 +35,18 @@ side builds with the distro aarch64 GCC, the M4/M7 firmware with distro arm-none
 
 Plugins (opt-in, `./rfnm-sdk init --plugins`): [gr-rfnm](https://github.com/rfnm/gr-rfnm),
 [soapy-rfnm](https://github.com/rfnm/soapy-rfnm), [matlab-rfnm](https://github.com/rfnm/matlab-rfnm),
-[rfnmctl](https://github.com/rfnm/rfnmctl) (host-side Python API kit). Community integrations
-(SDR++, SDRangel, SatDump, OpenWebRX, readsb, gnss-sdr) live in their upstream projects.
+[rfnmctl](https://github.com/rfnm/rfnmctl) (host-side Python API kit).
+
+## Application integrations (maintained forks)
+
+RFNM support for popular SDR applications lives on rfnm-org forks until the patches land
+upstream — clone the fork, check out its default branch, build per the upstream docs
+(librfnm from this SDK must be installed first):
+[SDR++](https://github.com/rfnm/SDRPlusPlus) · [SDRangel](https://github.com/rfnm/sdrangel) ·
+[SatDump](https://github.com/rfnm/SatDump) · [gnss-sdr](https://github.com/rfnm/gnss-sdr) ·
+[CyberEther](https://github.com/rfnm/CyberEther) · [readsb](https://github.com/rfnm/readsb) ·
+[owrx_connector](https://github.com/rfnm/owrx_connector) (OpenWebRX) ·
+[RyFi](https://github.com/rfnm/RyFi).
 
 The VSPA DSP firmware ships **prebuilt** in `firmware/vspa/` (self-describing `.eld` images —
 inspect with `tools/eld_ident.py show`); its source requires an NXP-licensed toolchain and is
