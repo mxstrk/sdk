@@ -18,6 +18,10 @@ Host requirements (Debian/Ubuntu): `gcc-aarch64-linux-gnu gcc-arm-none-eabi cmak
 rsync bison flex bc libssl-dev qemu-user-static sshpass`. No vendor toolchains: the Linux
 side builds with the distro aarch64 GCC, the M4/M7 firmware with distro arm-none-eabi GCC.
 
+Board requirement: the **current firmware image** (web GUI → Settings → Update). The SDK is
+built and verified against each firmware release; boards still on the original factory image
+must update once before first use — `sysroot`/`deploy` check this and refuse old images.
+
 ## What's in the stack
 
 | component (sources/) | repo | what it is |
@@ -61,8 +65,7 @@ factory/updater — the SDK does not rebuild it, it builds everything that runs 
 - `tools/` — reboot (with pluggable programmable-PSU backends), U-Boot serial automation,
   rootfs snapshots, build provenance audit, board status.
 - `docs/` — the NFS-boot developer workflow (TFTP kernel + NFS root: edit-build-boot without
-  touching eMMC), deploy rules, radio bring-up laws, firmware landscape, troubleshooting
-  (field-reported issues live in docs/troubleshooting.md).
+  touching eMMC), deploy rules, radio bring-up laws, firmware landscape.
 - `skills/` (mirrored in `.claude/skills/`) — instructions for coding agents (Claude Code
   and friends): cross-compile recipes with the full trap list, deploy rituals, first-session
   laws. Point your agent at `CLAUDE.md` and it knows the house rules.

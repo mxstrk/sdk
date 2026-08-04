@@ -5,6 +5,9 @@
 
 _rfnm_sdk_root="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 
+if [ -z "${RFNM_SYSROOT:-}" ] && [ -e "$_rfnm_sdk_root/sysroot/current" ]; then
+	RFNM_SYSROOT="$_rfnm_sdk_root/sysroot/current"    # what `./rfnm-sdk sysroot <board>` produced
+fi
 if [ -z "${RFNM_SYSROOT:-}" ]; then
 	RFNM_SYSROOT="$(python3 "$_rfnm_sdk_root/tools/rfnm_boards.py" first-rootfs 2>/dev/null)"
 fi

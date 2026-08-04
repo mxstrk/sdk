@@ -66,15 +66,16 @@ board_ssh() { # $1=user@ip $2=password; echoes nothing, fills SSHC
 	if command -v sshpass >/dev/null && [ -n "$2" ]; then SSHC=(sshpass -p "$2" "${SSHC[@]}"); fi
 }
 
-# absolute symlinks inside a copied sysroot point at the HOST's / - rewrite them relative
-# so the cross toolchain's --sysroot resolution works
-relativize_links() { # $1=sysroot dir
-	find "$1" -lname '/*' | while read -r l; do
-		local t rel
-		t=$(readlink "$l")
-		rel=$(realpath -m --relative-to="$(dirname "$l")" "$1$t")
-		ln -sfn "$rel" "$l"
-	done
+# the SDK targets the current firmware image; boards on the original factory image must
+# update first (web GUI -> Settings -> Update). Current images ship everything the board
+# side needs (rsync included) - there are no fallbacks for pre-SDK images.
+require_current_image() { # $1=board $2=user@ip; SSHC must be set
+	"${SSHC[@]}" "$2" true >/dev/null 2>&1 || die "cannot ssh to $2 - check boards.toml / network"
+	"${SSHC[@]}" "$2" 'command -v rsync' >/dev/null 2>&1 || \
+		die "board '$1' is running an old factory image (pre-SDK). Update the board firmware first (web GUI -> Settings -> Update), then re-run."
+	local rel
+	rel=$("${SSHC[@]}" "$2" 'cat /etc/rfnm-release 2>/dev/null' || true)
+	if [ -n "$rel" ]; then echo "  board image: $(echo "$rel" | sed -n 's/^RFNM_IMAGE_VERSION=//p') ($(echo "$rel" | sed -n 's/^RFNM_IMAGE_BUILD=//p'))"; fi
 }
 
 cmd_sysroot() {
@@ -89,27 +90,18 @@ cmd_sysroot() {
 	fi
 	local ip user pw; ip=$(board_field "$b" ip); user=$(board_field "$b" user); pw=$(board_field "$b" password)
 	[ -n "$ip" ] || die "board '$b' not in boards.toml"
+	command -v rsync >/dev/null || die "rsync missing on this host (apt install rsync)"
 	local SSHC; board_ssh "$user@$ip" "$pw"
+	require_current_image "$b" "$user@$ip"
 	mkdir -p "$SDK/sysroot/$b"
-	# rsync when BOTH sides have it (incremental, nice); tar-over-ssh otherwise - older
-	# board images ship without rsync, and tar is always there. RFNM_SYSROOT_TRANSPORT=tar forces it.
-	if [ "${RFNM_SYSROOT_TRANSPORT:-auto}" != tar ] && command -v rsync >/dev/null && \
-	   "${SSHC[@]}" "$user@$ip" 'command -v rsync' >/dev/null 2>&1; then
-		note "pulling sysroot from $user@$ip via rsync (headers + libraries only)"
-		local RS=(rsync -a --delete --copy-unsafe-links -e "${SSHC[*]}") rc=0
-		"${RS[@]}" --include='/usr' --include='/usr/include/***' --include='/usr/lib/***' \
-			--include='/usr/local' --include='/usr/local/include/***' --include='/usr/local/lib/***' \
-			--include='/lib/***' --exclude='*' "$user@$ip:/" "$SDK/sysroot/$b/" || rc=$?
-		# 23/24 = partial transfer (dangling symlinks / files vanishing) - normal on a live rootfs
-		case "$rc" in 0|23|24) ;; *) die "rsync failed (exit $rc)" ;; esac
-	else
-		note "pulling sysroot from $user@$ip via tar over ssh (board has no rsync - that's fine)"
-		"${SSHC[@]}" "$user@$ip" \
-			'cd / && ls -d usr/include usr/lib usr/local/include usr/local/lib lib 2>/dev/null | xargs tar -cf -' \
-			| tar -xf - -C "$SDK/sysroot/$b"
-		[ -d "$SDK/sysroot/$b/usr/include" ] || die "sysroot pull produced nothing - check ssh access to $user@$ip"
-		relativize_links "$SDK/sysroot/$b"
-	fi
+	note "pulling sysroot from $user@$ip (headers + libraries only)"
+	local RS=(rsync -a --delete --copy-unsafe-links -e "${SSHC[*]}") rc=0
+	"${RS[@]}" --include='/usr' --include='/usr/include/***' --include='/usr/lib/***' \
+		--include='/usr/local' --include='/usr/local/include/***' --include='/usr/local/lib/***' \
+		--include='/lib/***' --exclude='*' "$user@$ip:/" "$SDK/sysroot/$b/" || rc=$?
+	# 23/24 = partial transfer (dangling symlinks / files vanishing) - normal on a live rootfs
+	case "$rc" in 0|23|24) ;; *) die "rsync failed (exit $rc)" ;; esac
+	[ -d "$SDK/sysroot/$b/usr/include" ] || die "sysroot pull produced nothing - check ssh access to $user@$ip"
 	ln -sfn "$SDK/sysroot/$b" "$SDK/sysroot/current"
 	echo "sysroot ready: $SDK/sysroot/current"
 }
@@ -246,18 +238,12 @@ cmd_deploy() {
 	echo "will copy out/rootfs-overlay/ -> $user@$ip:/  and out/modules/ -> /rfnm/kernel/"
 	echo "kernel Image/dtb are NOT copied automatically (boot partition or TFTP dir - see docs/nfs-boot.md)"
 	read -r -p "proceed? [y/N] " a; [ "$a" = y ] || exit 1
+	command -v rsync >/dev/null || die "rsync missing on this host (apt install rsync)"
 	local SSHC; board_ssh "$user@$ip" "$pw"
-	if command -v rsync >/dev/null && "${SSHC[@]}" "$user@$ip" 'command -v rsync' >/dev/null 2>&1; then
-		local RS=(rsync -av -e "${SSHC[*]}")
-		"${RS[@]}" "$OUT/rootfs-overlay/" "$user@$ip:/"
-		if [ -d "$OUT/modules" ]; then "${RS[@]}" "$OUT/modules/" "$user@$ip:/rfnm/kernel/"; fi
-	else
-		echo "(board has no rsync - copying via tar over ssh)"
-		tar -C "$OUT/rootfs-overlay" -cf - . | "${SSHC[@]}" "$user@$ip" 'tar -xf - -C /'
-		if [ -d "$OUT/modules" ]; then
-			tar -C "$OUT/modules" -cf - . | "${SSHC[@]}" "$user@$ip" 'mkdir -p /rfnm/kernel && tar -xf - -C /rfnm/kernel'
-		fi
-	fi
+	require_current_image "$b" "$user@$ip"
+	local RS=(rsync -av -e "${SSHC[*]}")
+	"${RS[@]}" "$OUT/rootfs-overlay/" "$user@$ip:/"
+	if [ -d "$OUT/modules" ]; then "${RS[@]}" "$OUT/modules/" "$user@$ip:/rfnm/kernel/"; fi
 	"${SSHC[@]}" "$user@$ip" sync
 	echo "deployed. reboot the board (tools/reboot_board.sh $b) and wait for its ready marker."
 }
