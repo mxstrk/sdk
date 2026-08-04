@@ -46,7 +46,9 @@ upstream — clone the fork, check out its default branch, build per the upstrea
 [SatDump](https://github.com/rfnm/SatDump) · [gnss-sdr](https://github.com/rfnm/gnss-sdr) ·
 [CyberEther](https://github.com/rfnm/CyberEther) · [readsb](https://github.com/rfnm/readsb) ·
 [owrx_connector](https://github.com/rfnm/owrx_connector) (OpenWebRX) ·
-[RyFi](https://github.com/rfnm/RyFi).
+[RyFi](https://github.com/rfnm/RyFi) ·
+[OpenAirInterface 5G](https://github.com/rfnm/openairinterface5g) (gNB/UE with an RFNM
+radio module — see its radio/RFNM/README.md).
 
 The VSPA DSP firmware ships **prebuilt** in `firmware/vspa/` (self-describing `.eld` images —
 inspect with `tools/eld_ident.py show`); its source requires an NXP-licensed toolchain and is
