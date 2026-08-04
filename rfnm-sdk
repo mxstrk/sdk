@@ -60,6 +60,23 @@ cmd_update() {
 # ---------------------------------------------------------------- sysroot --
 board_field() { python3 "$SDK/tools/rfnm_boards.py" get "$1" "$2" 2>/dev/null || true; }
 
+# ssh command array for a board (password via sshpass when configured)
+board_ssh() { # $1=user@ip $2=password; echoes nothing, fills SSHC
+	SSHC=(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new)
+	if command -v sshpass >/dev/null && [ -n "$2" ]; then SSHC=(sshpass -p "$2" "${SSHC[@]}"); fi
+}
+
+# absolute symlinks inside a copied sysroot point at the HOST's / - rewrite them relative
+# so the cross toolchain's --sysroot resolution works
+relativize_links() { # $1=sysroot dir
+	find "$1" -lname '/*' | while read -r l; do
+		local t rel
+		t=$(readlink "$l")
+		rel=$(realpath -m --relative-to="$(dirname "$l")" "$1$t")
+		ln -sfn "$rel" "$l"
+	done
+}
+
 cmd_sysroot() {
 	local b="${1:?usage: rfnm-sdk sysroot <board>}"
 	local rootfs; rootfs=$(board_field "$b" rootfs)
@@ -67,18 +84,33 @@ cmd_sysroot() {
 	if [ -n "$rootfs" ] && [ -d "$rootfs" ]; then
 		note "board '$b' has an NFS rootfs on this host - using it directly as sysroot"
 		ln -sfn "$rootfs" "$SDK/sysroot/current"
-	else
-		local ip user pw; ip=$(board_field "$b" ip); user=$(board_field "$b" user); pw=$(board_field "$b" password)
-		[ -n "$ip" ] || die "board '$b' not in boards.toml"
-		note "pulling sysroot from $user@$ip (headers + libraries only)"
-		local RS=(rsync -a --delete --copy-unsafe-links -e "ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new")
-		command -v sshpass >/dev/null && [ -n "$pw" ] && RS=(sshpass -p "$pw" "${RS[@]}")
-		mkdir -p "$SDK/sysroot/$b"
+		echo "sysroot ready: $SDK/sysroot/current"
+		return
+	fi
+	local ip user pw; ip=$(board_field "$b" ip); user=$(board_field "$b" user); pw=$(board_field "$b" password)
+	[ -n "$ip" ] || die "board '$b' not in boards.toml"
+	local SSHC; board_ssh "$user@$ip" "$pw"
+	mkdir -p "$SDK/sysroot/$b"
+	# rsync when BOTH sides have it (incremental, nice); tar-over-ssh otherwise - older
+	# board images ship without rsync, and tar is always there. RFNM_SYSROOT_TRANSPORT=tar forces it.
+	if [ "${RFNM_SYSROOT_TRANSPORT:-auto}" != tar ] && command -v rsync >/dev/null && \
+	   "${SSHC[@]}" "$user@$ip" 'command -v rsync' >/dev/null 2>&1; then
+		note "pulling sysroot from $user@$ip via rsync (headers + libraries only)"
+		local RS=(rsync -a --delete --copy-unsafe-links -e "${SSHC[*]}") rc=0
 		"${RS[@]}" --include='/usr' --include='/usr/include/***' --include='/usr/lib/***' \
 			--include='/usr/local' --include='/usr/local/include/***' --include='/usr/local/lib/***' \
-			--include='/lib/***' --exclude='*' "$user@$ip:/" "$SDK/sysroot/$b/"
-		ln -sfn "$SDK/sysroot/$b" "$SDK/sysroot/current"
+			--include='/lib/***' --exclude='*' "$user@$ip:/" "$SDK/sysroot/$b/" || rc=$?
+		# 23/24 = partial transfer (dangling symlinks / files vanishing) - normal on a live rootfs
+		case "$rc" in 0|23|24) ;; *) die "rsync failed (exit $rc)" ;; esac
+	else
+		note "pulling sysroot from $user@$ip via tar over ssh (board has no rsync - that's fine)"
+		"${SSHC[@]}" "$user@$ip" \
+			'cd / && ls -d usr/include usr/lib usr/local/include usr/local/lib lib 2>/dev/null | xargs tar -cf -' \
+			| tar -xf - -C "$SDK/sysroot/$b"
+		[ -d "$SDK/sysroot/$b/usr/include" ] || die "sysroot pull produced nothing - check ssh access to $user@$ip"
+		relativize_links "$SDK/sysroot/$b"
 	fi
+	ln -sfn "$SDK/sysroot/$b" "$SDK/sysroot/current"
 	echo "sysroot ready: $SDK/sysroot/current"
 }
 
@@ -211,13 +243,22 @@ cmd_deploy() {
 	local ip user pw; ip=$(board_field "$b" ip); user=$(board_field "$b" user); pw=$(board_field "$b" password)
 	[ -n "$ip" ] || die "board '$b' not in boards.toml"
 	[ -d "$OUT/rootfs-overlay" ] || die "nothing built yet"
-	echo "will rsync out/rootfs-overlay/ -> $user@$ip:/  and out/modules/ -> /rfnm/kernel/"
+	echo "will copy out/rootfs-overlay/ -> $user@$ip:/  and out/modules/ -> /rfnm/kernel/"
 	echo "kernel Image/dtb are NOT copied automatically (boot partition or TFTP dir - see docs/nfs-boot.md)"
 	read -r -p "proceed? [y/N] " a; [ "$a" = y ] || exit 1
-	local RS=(rsync -av -e "ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new")
-	command -v sshpass >/dev/null && [ -n "$pw" ] && RS=(sshpass -p "$pw" "${RS[@]}")
-	"${RS[@]}" "$OUT/rootfs-overlay/" "$user@$ip:/"
-	if [ -d "$OUT/modules" ]; then "${RS[@]}" "$OUT/modules/" "$user@$ip:/rfnm/kernel/"; fi
+	local SSHC; board_ssh "$user@$ip" "$pw"
+	if command -v rsync >/dev/null && "${SSHC[@]}" "$user@$ip" 'command -v rsync' >/dev/null 2>&1; then
+		local RS=(rsync -av -e "${SSHC[*]}")
+		"${RS[@]}" "$OUT/rootfs-overlay/" "$user@$ip:/"
+		if [ -d "$OUT/modules" ]; then "${RS[@]}" "$OUT/modules/" "$user@$ip:/rfnm/kernel/"; fi
+	else
+		echo "(board has no rsync - copying via tar over ssh)"
+		tar -C "$OUT/rootfs-overlay" -cf - . | "${SSHC[@]}" "$user@$ip" 'tar -xf - -C /'
+		if [ -d "$OUT/modules" ]; then
+			tar -C "$OUT/modules" -cf - . | "${SSHC[@]}" "$user@$ip" 'mkdir -p /rfnm/kernel && tar -xf - -C /rfnm/kernel'
+		fi
+	fi
+	"${SSHC[@]}" "$user@$ip" sync
 	echo "deployed. reboot the board (tools/reboot_board.sh $b) and wait for its ready marker."
 }
 

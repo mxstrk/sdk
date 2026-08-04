@@ -61,7 +61,8 @@ factory/updater — the SDK does not rebuild it, it builds everything that runs 
 - `tools/` — reboot (with pluggable programmable-PSU backends), U-Boot serial automation,
   rootfs snapshots, build provenance audit, board status.
 - `docs/` — the NFS-boot developer workflow (TFTP kernel + NFS root: edit-build-boot without
-  touching eMMC), deploy rules, radio bring-up laws, firmware landscape.
+  touching eMMC), deploy rules, radio bring-up laws, firmware landscape, troubleshooting
+  (field-reported issues live in docs/troubleshooting.md).
 - `skills/` (mirrored in `.claude/skills/`) — instructions for coding agents (Claude Code
   and friends): cross-compile recipes with the full trap list, deploy rituals, first-session
   laws. Point your agent at `CLAUDE.md` and it knows the house rules.
