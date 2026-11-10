@@ -98,10 +98,14 @@ cmd_sysroot() {
 	local RS=(rsync -a --delete --copy-unsafe-links -e "${SSHC[*]}") rc=0
 	"${RS[@]}" --include='/usr' --include='/usr/include/***' --include='/usr/lib/***' \
 		--include='/usr/local' --include='/usr/local/include/***' --include='/usr/local/lib/***' \
-		--include='/lib/***' --exclude='*' "$user@$ip:/" "$SDK/sysroot/$b/" || rc=$?
+		--include='/lib' --include='/lib/***' --exclude='*' "$user@$ip:/" "$SDK/sysroot/$b/" || rc=$?
 	# 23/24 = partial transfer (dangling symlinks / files vanishing) - normal on a live rootfs
 	case "$rc" in 0|23|24) ;; *) die "rsync failed (exit $rc)" ;; esac
 	[ -d "$SDK/sysroot/$b/usr/include" ] || die "sysroot pull produced nothing - check ssh access to $user@$ip"
+	# usrmerge: on current images /lib is a symlink to usr/lib. '/lib/***' only matches a
+	# directory, and the libc.so/libm.so linker scripts name /lib/aarch64-linux-gnu/... -
+	# without this link the cross linker silently falls back to the HOST cross glibc.
+	[ -e "$SDK/sysroot/$b/lib" ] || ln -s usr/lib "$SDK/sysroot/$b/lib"
 	ln -sfn "$SDK/sysroot/$b" "$SDK/sysroot/current"
 	echo "sysroot ready: $SDK/sysroot/current"
 }

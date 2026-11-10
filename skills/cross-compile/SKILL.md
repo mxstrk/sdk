@@ -43,8 +43,17 @@ qemu-aarch64-static -L $RFNM_SYSROOT \
 ```
 
    Green under qemu = deployable. This catches missing libs, wrong glibc, and bad flags
-   before the board ever sees the binary.
-3. Deploy per the deploy-stack skill (keep a `.prev` backup of anything you replace).
+   before the board ever sees the binary. No qemu on the host? Copy the binary to the
+   board's `/tmp` and run the selftest there — never over the deployed one.
+3. Check the symbol versions against the sysroot — the link itself never complains:
+
+```bash
+aarch64-linux-gnu-objdump -T <bin> | grep -oE 'GLIBC_[0-9.]+|GLIBCXX_[0-9.]+' | sort -Vu | tail -3
+strings $RFNM_SYSROOT/usr/lib/aarch64-linux-gnu/libc.so.6 | grep -oE '^GLIBC_2\.[0-9]+$' | sort -V | tail -1
+```
+
+   The binary's highest `GLIBC_`/`GLIBCXX_` must not exceed the sysroot's (trap 10).
+4. Deploy per the deploy-stack skill (keep a `.prev` backup of anything you replace).
 
 ## Traps (each one costs a debug round — read before improvising)
 
@@ -75,5 +84,17 @@ qemu-aarch64-static -L $RFNM_SYSROOT \
 9. **DSP-heavy code**: prefer `-O3 -ftree-vectorize` + NEON intrinsics behind
    `__aarch64__`; `-fcx-limited-range` kills the per-complex-multiply libgcc call. Do NOT
    blanket `-ffast-math` — it shifts near-threshold numerical results.
+10. **The link "succeeds" against the HOST glibc.** Two ways in, both silent (2026-11-10,
+   lorad for blue126: built fine, then `GLIBC_2.43 not found` on the board, which has 2.39):
+   (a) a sysroot without `/lib` — on usrmerge images `/lib` is a symlink, and the
+   `libc.so`/`libm.so` linker scripts name `/lib/aarch64-linux-gnu/…`; `./rfnm-sdk sysroot`
+   now pulls/creates the `lib -> usr/lib` link, older sysroots need
+   `ln -s usr/lib <sysroot>/lib`. (b) the cross gcc driver searches its own
+   `/usr/aarch64-linux-gnu/lib` before the sysroot — `env.sh`/`imx8mp.cmake` now put
+   `-L<sysroot>/usr/lib/aarch64-linux-gnu` first; a hand-rolled LDFLAGS must do the same.
+   The host cross g++ (GCC 15) is newer than the board's libstdc++; linking against the
+   sysroot's `libstdc++.so.6` makes a too-new `GLIBCXX_` symbol a hard link error instead
+   of a board-side surprise. Prefer that over `-static-libstdc++` — librfnm itself uses
+   the board's libstdc++. `-Wl,--trace` shows which libc/libm/libstdc++ the link used.
 
 See `samples/` for a working cross-built librfnm client + Makefile.

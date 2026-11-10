@@ -34,7 +34,8 @@ set(CMAKE_CXX_FLAGS_INIT "-mcpu=cortex-a53 -isystem ${CMAKE_SYSROOT}/usr/local/i
 
 # Transitive shared-lib resolution inside the sysroot (rootfs paths, not host paths);
 # -L /usr/local/lib for the same Debian-cross-gcc gap as the -isystem above.
-set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${CMAKE_SYSROOT}/usr/local/lib -Wl,-rpath-link,${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu:${CMAKE_SYSROOT}/lib/aarch64-linux-gnu:${CMAKE_SYSROOT}/usr/local/lib")
+# The sysroot lib dirs come first so the cross driver's own (host) glibc/libstdc++ never wins.
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-L${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu -L${CMAKE_SYSROOT}/lib/aarch64-linux-gnu -L${CMAKE_SYSROOT}/usr/local/lib -Wl,-rpath-link,${CMAKE_SYSROOT}/usr/lib/aarch64-linux-gnu:${CMAKE_SYSROOT}/lib/aarch64-linux-gnu:${CMAKE_SYSROOT}/usr/local/lib")
 set(CMAKE_SHARED_LINKER_FLAGS_INIT "${CMAKE_EXE_LINKER_FLAGS_INIT}")
 
 # Search ONLY the sysroot for libs/headers/packages; host stays for build programs.

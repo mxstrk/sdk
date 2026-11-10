@@ -31,7 +31,10 @@ export OBJCOPY="${CROSS_TRIPLE}-objcopy"
 
 # A53+NEON always-on baseline; apps stack their own -O3/-ffast-math/etc on top.
 export ARCHFLAGS="-mcpu=cortex-a53"
-export CROSS_LDFLAGS="-L${RFNM_SYSROOT}/usr/local/lib -Wl,-rpath-link,${RFNM_SYSROOT}/usr/lib/aarch64-linux-gnu:${RFNM_SYSROOT}/lib/aarch64-linux-gnu:${RFNM_SYSROOT}/usr/local/lib"
+# The sysroot's own lib dirs go FIRST: the cross gcc driver otherwise searches its own
+# /usr/aarch64-linux-gnu/lib (the host's, usually newer glibc + libstdc++) before the
+# sysroot, and the binary then dies on the board with "GLIBC_2.xx not found".
+export CROSS_LDFLAGS="-L${RFNM_SYSROOT}/usr/lib/aarch64-linux-gnu -L${RFNM_SYSROOT}/lib/aarch64-linux-gnu -L${RFNM_SYSROOT}/usr/local/lib -Wl,-rpath-link,${RFNM_SYSROOT}/usr/lib/aarch64-linux-gnu:${RFNM_SYSROOT}/lib/aarch64-linux-gnu:${RFNM_SYSROOT}/usr/local/lib"
 
 # pkg-config confined to the sysroot — host .pc files must never leak into an aarch64 link.
 export PKG_CONFIG_SYSROOT_DIR="${RFNM_SYSROOT}"
